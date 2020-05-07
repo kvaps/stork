@@ -1,7 +1,14 @@
-FROM alpine:latest
+FROM registry.access.redhat.com/ubi8/ubi
 MAINTAINER Portworx Inc. <support@portworx.com>
 
-RUN apk add tar python3 ca-certificates && apk upgrade
+LABEL name="Stork" \
+       vendor="Openstorage.org" \
+       version="master" \
+       release="1" \
+       summary="Storage Operator Runtime for Kubernetes" \
+       description="Stork is a Cloud Native storage operator runtime scheduler plugin"
+
+RUN yum install wget python3 -y
 
 RUN wget -O /usr/local/bin/aws-iam-authenticator https://amazon-eks.s3-us-west-2.amazonaws.com/1.10.3/2018-07-26/bin/linux/amd64/aws-iam-authenticator && \
     chmod +x /usr/local/bin/aws-iam-authenticator
@@ -24,3 +31,4 @@ COPY ./bin/stork /
 COPY ./bin/linux/storkctl /storkctl/linux/
 COPY ./bin/darwin/storkctl /storkctl/darwin/
 COPY ./bin/windows/storkctl.exe /storkctl/windows/
+COPY ./LICENSE /licenses
