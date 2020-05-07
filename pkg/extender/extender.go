@@ -172,7 +172,7 @@ func (e *Extender) processFilterRequest(w http.ResponseWriter, req *http.Request
 	} else if len(driverVolumes) > 0 {
 		driverNodes, err := e.Driver.GetNodes()
 		if err != nil {
-			storklog.PodLog(pod).Errorf("Error getting list of driver nodes, returning all nodes")
+			storklog.PodLog(pod).Errorf("Error getting list of driver nodes, returning all nodes: %v", err)
 		} else {
 			for _, volumeInfo := range driverVolumes {
 				onlineNodeFound := false
@@ -273,13 +273,24 @@ func (e *Extender) getNodeScore(
 	regionInfo *localityInfo,
 	idMap map[string]*volume.NodeInfo,
 ) int {
+	logger := log.WithFields(log.Fields{
+		"node": node.Name,
+	})
+	logger.Debugf("getNodeScore, let's go")
 	for _, address := range node.Status.Addresses {
 		if address.Type != v1.NodeHostName {
 			continue
 		}
+		logger.Debugf("rack info: %+v", rackInfo)
+		logger.Debugf("zone info: %+v", zoneInfo)
+		logger.Debugf("region info: %+v", regionInfo)
 		nodeRack := rackInfo.HostnameMap[address.Address]
 		nodeZone := zoneInfo.HostnameMap[address.Address]
 		nodeRegion := regionInfo.HostnameMap[address.Address]
+
+		logger.Debugf("nodeRack: %v", nodeRack)
+		logger.Debugf("nodeZone: %v", nodeZone)
+		logger.Debugf("nodeRegion: %v", nodeRegion)
 
 		for _, region := range regionInfo.PreferredLocality {
 			if region == nodeRegion || nodeRegion == "" {
@@ -289,25 +300,30 @@ func (e *Extender) getNodeScore(
 							if rack == nodeRack || nodeRack == "" {
 								for _, datanode := range volumeInfo.DataNodes {
 									if volume.IsNodeMatch(&node, idMap[datanode]) {
+										logger.Debugf("node match, returning node priority score (%d)", nodePriorityScore)
 										return nodePriorityScore
 									}
 								}
 								if nodeRack != "" {
+									logger.Debugf("rack match, returning rack priority score (%d)", rackPriorityScore)
 									return rackPriorityScore
 								}
 							}
 						}
 						if nodeZone != "" {
+							logger.Debugf("zone match, returning zone priority score (%d)", zonePriorityScore)
 							return zonePriorityScore
 						}
 					}
 				}
 				if nodeRegion != "" {
+					logger.Debugf("region match, returning region priority score (%d)", regionPriorityScore)
 					return regionPriorityScore
 				}
 			}
 		}
 	}
+	logger.Debugf("no match, returning 0")
 	return 0
 }
 
@@ -360,6 +376,7 @@ func (e *Extender) processPrioritizeRequest(w http.ResponseWriter, req *http.Req
 		}
 		goto sendResponse
 	} else if len(driverVolumes) > 0 {
+		storklog.PodLog(pod).Debugf("Got driverVolumes: %+v", driverVolumes)
 		driverNodes, err := e.Driver.GetNodes()
 		if err != nil {
 			storklog.PodLog(pod).Errorf("Error getting nodes for driver: %v", err)
@@ -443,6 +460,7 @@ sendResponse:
 	for _, node := range args.Nodes.Items {
 		score, ok := priorityMap[node.Name]
 		if !ok || score == 0 {
+			storklog.PodLog(pod).Debugf("node %s not in priority map, assigning %d", node.Name, defaultScore)
 			score = defaultScore
 		}
 		hostPriority := schedulerapi.HostPriority{Host: node.Name, Score: score}
