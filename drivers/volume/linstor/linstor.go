@@ -2,9 +2,13 @@ package linstor
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"math/rand"
+	"net/http"
 	"net/url"
+	"os"
 	"time"
 
 	lclient "github.com/LINBIT/golinstor/client"
@@ -65,18 +69,43 @@ func (l *linstor) Init(_ interface{}) error {
 		return fmt.Errorf("error getting client: %w", err)
 	}
 
-	endpoint, err := k8sClient.CoreV1().Endpoints("default").Get("linstor-op-cs", metav1.GetOptions{})
-	if err != nil {
-		return fmt.Errorf("error getting linstor endpoint: %w", err)
+	// Setup HTTP client with optional TLS mutual auth.
+	h := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{}}}
+	certPEM, cert := os.LookupEnv("LS_USER_CERTIFICATE")
+	keyPEM, key := os.LookupEnv("LS_USER_KEY")
+	caPEM, ca := os.LookupEnv("LS_ROOT_CA")
+	if cert && key && ca {
+		keyPair, err := tls.X509KeyPair([]byte(certPEM), []byte(keyPEM))
+		if err != nil {
+			return fmt.Errorf("failed to load keys: %w", err)
+		}
+		caPool := x509.NewCertPool()
+		ok := caPool.AppendCertsFromPEM([]byte(caPEM))
+		if !ok {
+			return fmt.Errorf("failed to get a valid certificate from LS_ROOT_CA")
+		}
+		h = &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{Certificates: []tls.Certificate{keyPair}, RootCAs: caPool}}}
 	}
-
-	logrus.Infof("got endpoint: %+v", endpoint)
-	u, err := url.Parse(fmt.Sprintf("http://%s:%d", endpoint.Subsets[0].Addresses[0].IP, endpoint.Subsets[0].Ports[0].Port))
+	lsEndpoint, ok := os.LookupEnv("LS_ENDPOINT")
+	if !ok {
+		// Fallback to 'linstor-op-cs' endpoint
+		endpoint, err := k8sClient.CoreV1().Endpoints("default").Get("linstor-op-cs", metav1.GetOptions{})
+		if err != nil {
+			return fmt.Errorf("error getting linstor endpoint: %w", err)
+		}
+		logrus.Infof("got endpoint: %+v", endpoint)
+		lsEndpoint = fmt.Sprintf("http://%s:%d", endpoint.Subsets[0].Addresses[0].IP, endpoint.Subsets[0].Ports[0].Port)
+	}
+	u, err := url.Parse(lsEndpoint)
 	if err != nil {
 		return fmt.Errorf("error parsing linstor endpoint URL: %w", err)
 	}
 
-	l.cli, err = lclient.NewClient(lclient.BaseURL(u))
+	l.cli, err = lclient.NewClient(
+		lclient.BaseURL(u),
+		lclient.BasicAuth(&lclient.BasicAuthCfg{Username: os.Getenv("LS_USERNAME"), Password: os.Getenv("LS_PASSWORD")}),
+		lclient.HTTPClient(h),
+	)
 	if err != nil {
 		return fmt.Errorf("error creating linstor client: %w", err)
 	}
